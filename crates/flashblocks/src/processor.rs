@@ -12,7 +12,7 @@ use alloy_consensus::{
 };
 use alloy_eips::BlockNumberOrTag;
 use alloy_op_evm::block::receipt_builder::OpReceiptBuilder;
-use alloy_primitives::{B256, BlockNumber, Bytes, Sealable, map::foldhash::HashMap};
+use alloy_primitives::{B256, BlockNumber, Bytes, Sealable};
 use alloy_rpc_types::{TransactionTrait, Withdrawal};
 use alloy_rpc_types_engine::{ExecutionPayloadV1, ExecutionPayloadV2, ExecutionPayloadV3};
 use alloy_rpc_types_eth::state::StateOverride;
@@ -33,7 +33,7 @@ use reth::{
 use reth_evm::{ConfigureEvm, Evm, eth::receipt_builder::ReceiptBuilderCtx};
 use reth_optimism_chainspec::OpHardforks;
 use reth_optimism_evm::{OpEvmConfig, OpNextBlockEnvAttributes};
-use reth_optimism_primitives::{DepositReceipt, OpBlock, OpPrimitives};
+use reth_optimism_primitives::{OpBlock, OpPrimitives};
 use reth_optimism_rpc::OpReceiptBuilder as OpRpcReceiptBuilder;
 use reth_primitives::RecoveredBlock;
 use reth_rpc_convert::transaction::ConvertReceiptInput;
@@ -330,24 +330,6 @@ where
                 .flat_map(|flashblock| flashblock.diff.withdrawals.clone())
                 .collect();
 
-            let receipt_by_hash = flashblocks
-                .iter()
-                .map(|flashblock| flashblock.metadata.receipts.clone())
-                .fold(HashMap::default(), |mut acc, receipts| {
-                    if let Some(receipts) = receipts {
-                        acc.extend(receipts);
-                    }
-                    acc
-                });
-
-            let updated_balances = flashblocks
-                .iter()
-                .map(|flashblock| flashblock.metadata.new_account_balances.clone())
-                .fold(HashMap::default(), |mut acc, balances| {
-                    acc.extend(balances);
-                    acc
-                });
-
             pending_blocks_builder.with_flashblocks(
                 flashblocks.iter().map(|&x| x.clone()).collect::<Vec<Flashblock>>(),
             );
@@ -410,23 +392,8 @@ where
                 pending_blocks_builder.with_transaction_sender(tx_hash, sender);
                 pending_blocks_builder.increment_nonce(sender);
 
-                let receipt = receipt_by_hash.get(&tx_hash).cloned();
-
                 let recovered_transaction = Recovered::new_unchecked(transaction.clone(), sender);
                 let envelope = recovered_transaction.clone().convert::<OpTxEnvelope>();
-
-                // Build Transaction
-                let (deposit_receipt_version, deposit_nonce) = if transaction.is_deposit()
-                    && let Some(receipt) = &receipt
-                {
-                    let deposit_receipt = receipt
-                        .as_deposit_receipt()
-                        .ok_or(eyre!("deposit transaction, non deposit receipt"))?;
-
-                    (deposit_receipt.deposit_receipt_version, deposit_receipt.deposit_nonce)
-                } else {
-                    (None, None)
-                };
 
                 let effective_gas_price = if transaction.is_deposit() {
                     0
@@ -440,19 +407,6 @@ where
                         .unwrap_or_else(|| transaction.max_fee_per_gas())
                 };
 
-                let rpc_txn = Transaction {
-                    inner: alloy_rpc_types_eth::Transaction {
-                        inner: envelope,
-                        block_hash: Some(header.hash()),
-                        block_number: Some(base.block_number),
-                        transaction_index: Some(idx as u64),
-                        effective_gas_price: Some(effective_gas_price),
-                    },
-                    deposit_nonce,
-                    deposit_receipt_version,
-                };
-
-                pending_blocks_builder.with_transaction(rpc_txn);
                 let mut should_execute_transaction = true;
 
                 // Receipt Generation
@@ -460,6 +414,32 @@ where
                     let receipt = prev_pending_blocks.as_ref().and_then(|p| p.get_receipt(tx_hash));
 
                     if let Some(receipt) = receipt {
+                        // Build Transaction
+                        let (deposit_receipt_version, deposit_nonce) = if transaction.is_deposit() {
+                            let deposit_receipt = receipt
+                                .inner
+                                .inner
+                                .as_deposit_receipt()
+                                .ok_or(eyre!("deposit transaction, non deposit receipt"))?;
+
+                            (deposit_receipt.deposit_receipt_version, deposit_receipt.deposit_nonce)
+                        } else {
+                            (None, None)
+                        };
+
+                        let rpc_txn = Transaction {
+                            inner: alloy_rpc_types_eth::Transaction {
+                                inner: envelope,
+                                block_hash: Some(header.hash()),
+                                block_number: Some(base.block_number),
+                                transaction_index: Some(idx as u64),
+                                effective_gas_price: Some(effective_gas_price),
+                            },
+                            deposit_nonce,
+                            deposit_receipt_version,
+                        };
+
+                        pending_blocks_builder.with_transaction(rpc_txn);
                         pending_blocks_builder.with_receipt(tx_hash, receipt);
                         true
                     } else {
@@ -471,6 +451,9 @@ where
                     && let Some(state) =
                         prev_pending_blocks.as_ref().and_then(|p| p.get_transaction_state(&tx_hash))
                 {
+                    for (address, account) in state.iter() {
+                        pending_blocks_builder.with_account_balance(*address, account.info.balance);
+                    }
                     pending_blocks_builder.with_transaction_state(tx_hash, state);
                     should_execute_transaction = false;
                 }
@@ -480,6 +463,9 @@ where
                         Ok(ResultAndState { state, result }) => {
                             let gas_used = result.gas_used();
                             for (addr, acc) in &state {
+                                pending_blocks_builder
+                                    .with_account_balance(*addr, acc.info.balance);
+
                                 let existing_override = state_overrides.entry(*addr).or_default();
                                 existing_override.balance = Some(acc.info.balance);
                                 existing_override.nonce = Some(acc.info.nonce);
@@ -506,6 +492,12 @@ where
                                 .client
                                 .chain_spec()
                                 .is_canyon_active_at_timestamp(block.timestamp);
+
+                            let is_regolith_active = self
+                                .client
+                                .chain_spec()
+                                .is_regolith_active_at_timestamp(block.timestamp);
+
                             let receipt = match receipt_builder.build_receipt(ReceiptBuilderCtx {
                                 tx: &recovered_transaction,
                                 evm: &evm,
@@ -522,6 +514,23 @@ where
                                         cumulative_gas_used: ctx.cumulative_gas_used,
                                         logs: ctx.result.into_logs(),
                                     };
+
+                                    // Cache the depositor account prior to the state transition for the deposit nonce.
+                                    //
+                                    // Note that this *only* needs to be done post-regolith hardfork, as deposit nonces
+                                    // were not introduced in Bedrock. In addition, regular transactions don't have deposit
+                                    // nonces, so we don't need to touch the DB for those.
+                                    let deposit_nonce = (is_regolith_active
+                                        && transaction.is_deposit())
+                                    .then(|| {
+                                        evm.db_mut()
+                                            .load_account(recovered_transaction.signer())
+                                            .map(|acc| acc.info.nonce)
+                                    })
+                                    .transpose()
+                                    .map_err(|_| {
+                                        eyre!("failed to load cache account for depositor")
+                                    })?;
 
                                     receipt_builder.build_deposit_receipt(OpDepositReceipt {
                                         inner: receipt,
@@ -578,10 +587,6 @@ where
                         }
                     }
                 }
-            }
-
-            for (address, balance) in updated_balances {
-                pending_blocks_builder.with_account_balance(address, balance);
             }
 
             db = evm.into_db();

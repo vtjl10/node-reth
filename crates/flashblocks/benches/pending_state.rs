@@ -224,11 +224,7 @@ fn base_flashblock(
             transactions: vec![BLOCK_INFO_TXN.clone()],
             blob_gas_used: Default::default(),
         },
-        metadata: Metadata {
-            block_number,
-            receipts: None,
-            new_account_balances: Default::default(),
-        },
+        metadata: Metadata { block_number },
     }
 }
 
@@ -260,11 +256,7 @@ fn transaction_flashblock(
             transactions: tx_bytes,
             blob_gas_used: Default::default(),
         },
-        metadata: Metadata {
-            block_number,
-            receipts: None,
-            new_account_balances: Default::default(),
-        },
+        metadata: Metadata { block_number },
     }
 }
 

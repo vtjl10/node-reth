@@ -12,7 +12,7 @@
 //! - TransparentUpgradeableProxy: OpenZeppelin's proxy (lib/openzeppelin-contracts)
 
 use alloy_eips::BlockNumberOrTag;
-use alloy_primitives::{Address, B256, Bytes, U256, map::HashMap};
+use alloy_primitives::{Address, B256, Bytes, U256};
 use alloy_provider::Provider;
 use alloy_rpc_types_engine::PayloadId;
 use alloy_sol_types::{SolConstructor, SolValue};
@@ -71,8 +71,6 @@ impl Erc20TestSetup {
 
     /// Create the base flashblock payload (block info only)
     fn create_base_payload(&self) -> Flashblock {
-        let deployer_address = self.harness.accounts().deployer.address;
-
         Flashblock {
             payload_id: PayloadId::new([0; 8]),
             index: 0,
@@ -92,17 +90,7 @@ impl Erc20TestSetup {
                 transactions: vec![L1_BLOCK_INFO_DEPOSIT_TX],
                 ..Default::default()
             },
-            metadata: Metadata {
-                block_number: 1,
-                receipts: None,
-                new_account_balances: {
-                    // Give deployer enough ETH for contract deployments
-                    let mut balances = HashMap::default();
-                    balances
-                        .insert(deployer_address, U256::from(10_000_000_000_000_000_000_000u128)); // 10000 ETH
-                    balances
-                },
-            },
+            metadata: Metadata { block_number: 1 },
         }
     }
 
@@ -128,11 +116,7 @@ impl Erc20TestSetup {
                 logs_bloom: Default::default(),
                 withdrawals_root: Default::default(),
             },
-            metadata: Metadata {
-                block_number: 1,
-                receipts: None,
-                new_account_balances: HashMap::default(),
-            },
+            metadata: Metadata { block_number: 1 },
         }
     }
 
@@ -153,11 +137,7 @@ impl Erc20TestSetup {
                 logs_bloom: Default::default(),
                 withdrawals_root: Default::default(),
             },
-            metadata: Metadata {
-                block_number: 1,
-                receipts: None,
-                new_account_balances: HashMap::default(),
-            },
+            metadata: Metadata { block_number: 1 },
         }
     }
 

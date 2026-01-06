@@ -324,11 +324,7 @@ impl<'a> FlashblockBuilder<'a> {
                 transactions: self.transactions.clone(),
                 blob_gas_used: Default::default(),
             },
-            metadata: Metadata {
-                block_number: canonical_block_num,
-                receipts: self.receipts.clone(),
-                new_account_balances: HashMap::default(),
-            },
+            metadata: Metadata { block_number: canonical_block_num },
         }
     }
 }

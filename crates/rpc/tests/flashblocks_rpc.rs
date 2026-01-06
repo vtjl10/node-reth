@@ -5,7 +5,7 @@ use std::str::FromStr;
 use DoubleCounter::DoubleCounterInstance;
 use alloy_consensus::Transaction;
 use alloy_eips::BlockNumberOrTag;
-use alloy_primitives::{Address, B256, Bytes, TxHash, U256, address, b256, bytes, map::HashMap};
+use alloy_primitives::{Address, B256, Bytes, TxHash, U256, address, b256, bytes};
 use alloy_provider::Provider;
 use alloy_rpc_client::RpcClient;
 use alloy_rpc_types::simulate::{SimBlock, SimulatePayload};
@@ -107,11 +107,7 @@ impl TestSetup {
                 transactions: vec![L1_BLOCK_INFO_DEPOSIT_TX],
                 ..Default::default()
             },
-            metadata: Metadata {
-                block_number: 1,
-                receipts: None,
-                new_account_balances: HashMap::default(),
-            },
+            metadata: Metadata { block_number: 1 },
         }
     }
 
@@ -137,15 +133,7 @@ impl TestSetup {
                 logs_bloom: Default::default(),
                 withdrawals_root: Default::default(),
             },
-            metadata: Metadata {
-                block_number: 1,
-                receipts: None,
-                new_account_balances: {
-                    let mut map = HashMap::default();
-                    map.insert(TEST_ADDRESS, U256::from(PENDING_BALANCE));
-                    map
-                },
-            },
+            metadata: Metadata { block_number: 1 },
         }
     }
 
@@ -199,6 +187,7 @@ const DEPOSIT_SENDER: Address = address!("0xdeaddeaddeaddeaddeaddeaddeaddeaddead
 const DEPOSIT_TX: Bytes = bytes!(
     "0x7ef8f8a042a8ae5ec231af3d0f90f68543ec8bca1da4f7edd712d5b51b490688355a6db794deaddeaddeaddeaddeaddeaddeaddeaddead00019442000000000000000000000000000000000000158080830f424080b8a4440a5e200000044d000a118b00000000000000040000000067cb7cb0000000000077dbd4000000000000000000000000000000000000000000000000000000000000000a00000000000000000000000000000000000000000000000000000000000000014edd27304108914dd6503b19b9eeb9956982ef197febbeeed8a9eac3dbaaabdf000000000000000000000000fc56e7272eebbba5bc6c544e159483c4a38f8ba3"
 );
+const DEPOSIT_GAS_USED: u64 = 24770;
 const DEPOSIT_TX_HASH: TxHash =
     b256!("0x2be2e6f8b01b03b87ae9f0ebca8bbd420f174bef0fbcc18c7802c5378b78f548");
 
@@ -315,13 +304,13 @@ async fn test_get_transaction_receipt_pending() -> Result<()> {
 
     let receipt =
         provider.get_transaction_receipt(DEPOSIT_TX_HASH).await?.expect("receipt expected");
-    assert_eq!(receipt.gas_used(), 21000);
+    assert_eq!(receipt.gas_used(), DEPOSIT_GAS_USED);
 
     let receipt = provider
         .get_transaction_receipt(setup.txn_details.alice_eth_transfer_hash)
         .await?
         .expect("receipt expected");
-    assert_eq!(receipt.gas_used(), 24000); // 45000 - 21000
+    assert_eq!(receipt.gas_used(), 21000);
 
     Ok(())
 }
