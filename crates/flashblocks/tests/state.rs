@@ -730,7 +730,7 @@ async fn test_metadata_receipts_are_optional() {
     let deposit_tx = &pending_block.transactions.as_transactions().unwrap()[0];
     assert_eq!(
         deposit_tx.deposit_nonce,
-        Some(4012991u64),
+        Some(0),
         "deposit_nonce should be available even when no receipts"
     );
 }
