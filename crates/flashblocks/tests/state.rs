@@ -726,12 +726,13 @@ async fn test_metadata_receipts_are_optional() {
         test.flashblocks.get_pending_blocks().get_block(true).expect("block should be created");
     assert_eq!(pending_block.transactions.len(), 1);
 
-    // Check that the deposit transaction has None for deposit_nonce
+    // Check that the deposit transaction has the correct nonce
     let deposit_tx = &pending_block.transactions.as_transactions().unwrap()[0];
-    assert_eq!(deposit_tx.deposit_nonce, None, "deposit_nonce should be None when no receipts");
-
-    // Canonical blocks trivially have the deposit_nonce since they are handled by canonical RPC
-    // logic.
+    assert_eq!(
+        deposit_tx.deposit_nonce,
+        Some(4012991u64),
+        "deposit_nonce should be available even when no receipts"
+    );
 }
 
 #[tokio::test]
