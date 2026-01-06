@@ -429,7 +429,7 @@ where
 
                         let rpc_txn = Transaction {
                             inner: alloy_rpc_types_eth::Transaction {
-                                inner: envelope,
+                                inner: envelope.clone(), // this clone will be unnecessary after we separate execution/cached paths more clearly
                                 block_hash: Some(header.hash()),
                                 block_number: Some(base.block_number),
                                 transaction_index: Some(idx as u64),
@@ -579,6 +579,21 @@ where
                             .build();
                             next_log_index += receipt.logs().len();
 
+                            let (deposit_receipt_version, deposit_nonce) =
+                                if transaction.is_deposit() {
+                                    let deposit_receipt =
+                                        op_receipt.inner.inner.as_deposit_receipt().ok_or(
+                                            eyre!("deposit transaction, non deposit receipt"),
+                                        )?;
+
+                                    (
+                                        deposit_receipt.deposit_receipt_version,
+                                        deposit_receipt.deposit_nonce,
+                                    )
+                                } else {
+                                    (None, None)
+                                };
+
                             let rpc_txn = Transaction {
                                 inner: alloy_rpc_types_eth::Transaction {
                                     inner: envelope,
@@ -588,7 +603,7 @@ where
                                     effective_gas_price: Some(effective_gas_price),
                                 },
                                 deposit_nonce,
-                                deposit_receipt_version: is_canyon_active.then_some(1),
+                                deposit_receipt_version,
                             };
 
                             pending_blocks_builder.with_transaction(rpc_txn);
