@@ -461,7 +461,7 @@ where
                     cumulative_gas_used = cumulative_gas_used
                         .checked_add(gas_used)
                         .ok_or(eyre!("cumulative gas used overflow"))?;
-                    next_log_index = next_log_index + log_count;
+                    next_log_index += log_count;
                 }
 
                 if should_execute_transaction {
@@ -577,7 +577,7 @@ where
                             )
                             .unwrap()
                             .build();
-                            next_log_index = next_log_index + receipt.logs().len();
+                            next_log_index += receipt.logs().len();
 
                             pending_blocks_builder.with_receipt(tx_hash, op_receipt);
                             pending_blocks_builder.with_transaction_state(tx_hash, state.clone());
