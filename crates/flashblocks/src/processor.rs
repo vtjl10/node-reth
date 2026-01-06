@@ -579,6 +579,19 @@ where
                             .build();
                             next_log_index += receipt.logs().len();
 
+                            let rpc_txn = Transaction {
+                                inner: alloy_rpc_types_eth::Transaction {
+                                    inner: envelope,
+                                    block_hash: Some(header.hash()),
+                                    block_number: Some(base.block_number),
+                                    transaction_index: Some(idx as u64),
+                                    effective_gas_price: Some(effective_gas_price),
+                                },
+                                deposit_nonce,
+                                deposit_receipt_version: is_canyon_active.then_some(1),
+                            };
+
+                            pending_blocks_builder.with_transaction(rpc_txn);
                             pending_blocks_builder.with_receipt(tx_hash, op_receipt);
                             pending_blocks_builder.with_transaction_state(tx_hash, state.clone());
                             evm.db_mut().commit(state);
