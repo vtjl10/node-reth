@@ -413,7 +413,7 @@ where
                 let saved_receipt = {
                     let receipt = prev_pending_blocks.as_ref().and_then(|p| p.get_receipt(tx_hash));
 
-                    if let Some(receipt) = receipt {
+                    if let Some(receipt) = &receipt {
                         // Build Transaction
                         let (deposit_receipt_version, deposit_nonce) = if transaction.is_deposit() {
                             let deposit_receipt = receipt
@@ -440,14 +440,14 @@ where
                         };
 
                         pending_blocks_builder.with_transaction(rpc_txn);
-                        pending_blocks_builder.with_receipt(tx_hash, receipt);
-                        true
+                        pending_blocks_builder.with_receipt(tx_hash, receipt.clone());
+                        Some((receipt.inner.gas_used, receipt.inner.logs().len()))
                     } else {
-                        false
+                        None
                     }
                 };
 
-                if saved_receipt
+                if let Some((gas_used, log_count)) = saved_receipt
                     && let Some(state) =
                         prev_pending_blocks.as_ref().and_then(|p| p.get_transaction_state(&tx_hash))
                 {
@@ -456,6 +456,12 @@ where
                     }
                     pending_blocks_builder.with_transaction_state(tx_hash, state);
                     should_execute_transaction = false;
+
+                    // still need to update if we're skipping execution
+                    cumulative_gas_used = cumulative_gas_used
+                        .checked_add(gas_used)
+                        .ok_or(eyre!("cumulative gas used overflow"))?;
+                    next_log_index = next_log_index + log_count;
                 }
 
                 if should_execute_transaction {
