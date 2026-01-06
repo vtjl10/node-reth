@@ -3,11 +3,9 @@
 use std::str::FromStr;
 
 use DoubleCounter::DoubleCounterInstance;
-use alloy_consensus::{Receipt, Transaction};
+use alloy_consensus::Transaction;
 use alloy_eips::BlockNumberOrTag;
-use alloy_primitives::{
-    Address, B256, Bytes, LogData, TxHash, U256, address, b256, bytes, map::HashMap,
-};
+use alloy_primitives::{Address, B256, Bytes, TxHash, U256, address, b256, bytes, map::HashMap};
 use alloy_provider::Provider;
 use alloy_rpc_client::RpcClient;
 use alloy_rpc_types::simulate::{SimBlock, SimulatePayload};
@@ -16,16 +14,12 @@ use alloy_rpc_types_eth::{TransactionInput, error::EthRpcErrorCode};
 use base_flashtypes::{
     ExecutionPayloadBaseV1, ExecutionPayloadFlashblockDeltaV1, Flashblock, Metadata,
 };
-use base_reth_test_utils::{
-    DoubleCounter, FlashblocksHarness, L1_BLOCK_INFO_DEPOSIT_TX, L1_BLOCK_INFO_DEPOSIT_TX_HASH,
-};
+use base_reth_test_utils::{DoubleCounter, FlashblocksHarness, L1_BLOCK_INFO_DEPOSIT_TX};
 use eyre::Result;
 use futures_util::{SinkExt, StreamExt};
-use op_alloy_consensus::OpDepositReceipt;
 use op_alloy_network::{Optimism, ReceiptResponse, TransactionResponse};
 use op_alloy_rpc_types::OpTransactionRequest;
 use reth::revm::context::TransactionType;
-use reth_optimism_primitives::OpReceipt;
 use reth_rpc_eth_api::RpcReceipt;
 use serde_json::json;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
@@ -37,14 +31,12 @@ struct TestSetup {
 
 struct TransactionDetails {
     counter_deployment_tx: Bytes,
-    counter_deployment_hash: TxHash,
     counter_address: Address,
 
     counter_increment_tx: Bytes,
     counter_increment_hash: TxHash,
 
     counter_increment2_tx: Bytes,
-    counter_increment2_hash: TxHash,
 
     alice_eth_transfer_tx: Bytes,
     alice_eth_transfer_hash: TxHash,
@@ -59,14 +51,14 @@ impl TestSetup {
         let alice = &harness.accounts().alice;
         let bob = &harness.accounts().bob;
 
-        let (counter_deployment_tx, counter_address, counter_deployment_hash) = deployer
+        let (counter_deployment_tx, counter_address, _) = deployer
             .create_deployment_tx(DoubleCounter::BYTECODE.clone(), 0)
             .expect("should be able to sign DoubleCounter deployment txn");
         let counter = DoubleCounterInstance::new(counter_address.clone(), provider);
         let (increment1_tx, increment1_tx_hash) = deployer
             .sign_txn_request(counter.increment().into_transaction_request().nonce(1))
             .expect("should be able to sign increment() txn");
-        let (increment2_tx, increment2_tx_hash) = deployer
+        let (increment2_tx, _) = deployer
             .sign_txn_request(counter.increment2().into_transaction_request().nonce(2))
             .expect("should be able to sign increment2() txn");
         let (eth_transfer_tx, eth_transfer_hash) = alice
@@ -84,12 +76,10 @@ impl TestSetup {
 
         let txn_details = TransactionDetails {
             counter_deployment_tx,
-            counter_deployment_hash,
             counter_address,
             counter_increment_tx: increment1_tx,
             counter_increment_hash: increment1_tx_hash,
             counter_increment2_tx: increment2_tx,
-            counter_increment2_hash: increment2_tx_hash,
             alice_eth_transfer_tx: eth_transfer_tx,
             alice_eth_transfer_hash: eth_transfer_hash,
         };
@@ -119,22 +109,7 @@ impl TestSetup {
             },
             metadata: Metadata {
                 block_number: 1,
-                receipts: {
-                    let mut receipts = HashMap::default();
-                    receipts.insert(
-                        L1_BLOCK_INFO_DEPOSIT_TX_HASH,
-                        OpReceipt::Deposit(OpDepositReceipt {
-                            inner: Receipt {
-                                status: true.into(),
-                                cumulative_gas_used: 10000,
-                                logs: vec![],
-                            },
-                            deposit_nonce: Some(4012991u64),
-                            deposit_receipt_version: None,
-                        }),
-                    );
-                    receipts
-                },
+                receipts: None,
                 new_account_balances: HashMap::default(),
             },
         }
@@ -164,71 +139,7 @@ impl TestSetup {
             },
             metadata: Metadata {
                 block_number: 1,
-                receipts: {
-                    let mut receipts = HashMap::default();
-                    receipts.insert(
-                        DEPOSIT_TX_HASH,
-                        OpReceipt::Deposit(OpDepositReceipt {
-                            inner: Receipt {
-                                status: true.into(),
-                                cumulative_gas_used: 31000,
-                                logs: vec![],
-                            },
-                            deposit_nonce: Some(4012992u64),
-                            deposit_receipt_version: None,
-                        }),
-                    );
-                    receipts.insert(
-                        self.txn_details.alice_eth_transfer_hash,
-                        OpReceipt::Legacy(Receipt {
-                            status: true.into(),
-                            cumulative_gas_used: 55000,
-                            logs: vec![],
-                        }),
-                    );
-                    receipts.insert(
-                        self.txn_details.counter_deployment_hash,
-                        OpReceipt::Legacy(Receipt {
-                            status: true.into(),
-                            cumulative_gas_used: 272279,
-                            logs: vec![],
-                        }),
-                    );
-                    receipts.insert(
-                        self.txn_details.counter_increment_hash,
-                        OpReceipt::Legacy(Receipt {
-                            status: true.into(),
-                            cumulative_gas_used: 272279 + 44000,
-                            logs:   vec![
-                                    alloy_primitives::Log {
-                                        address: self.txn_details.counter_address,
-                                        data: LogData::new(
-                                            vec![TEST_LOG_TOPIC_0, TEST_LOG_TOPIC_1, TEST_LOG_TOPIC_2],
-                                            bytes!("0x0000000000000000000000000000000000000000000000000de0b6b3a7640000").into(), // 1 ETH in wei
-                                        )
-                                        .unwrap(),
-                                    },
-                                    alloy_primitives::Log {
-                                        address: TEST_ADDRESS,
-                                        data: LogData::new(
-                                            vec![TEST_LOG_TOPIC_0],
-                                            bytes!("0x0000000000000000000000000000000000000000000000000000000000000001").into(), // Value: 1
-                                        )
-                                        .unwrap(),
-                                    },
-                                ]
-                        }),
-                    );
-                    receipts.insert(
-                        self.txn_details.counter_increment2_hash,
-                        OpReceipt::Legacy(Receipt {
-                            status: true.into(),
-                            cumulative_gas_used: 272279 + 44000 + 44000,
-                            logs: vec![],
-                        }),
-                    );
-                    receipts
-                },
+                receipts: None,
                 new_account_balances: {
                     let mut map = HashMap::default();
                     map.insert(TEST_ADDRESS, U256::from(PENDING_BALANCE));
@@ -296,8 +207,6 @@ const TEST_LOG_TOPIC_0: B256 =
     b256!("0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"); // Transfer event
 const TEST_LOG_TOPIC_1: B256 =
     b256!("0x000000000000000000000000f39fd6e51aad88f6f4ce6ab8827279cfffb92266"); // From address
-const TEST_LOG_TOPIC_2: B256 =
-    b256!("0x0000000000000000000000001234567890123456789012345678901234567890"); // To address
 
 #[tokio::test]
 async fn test_get_pending_block() -> Result<()> {

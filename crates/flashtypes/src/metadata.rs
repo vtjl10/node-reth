@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Default)]
 pub struct Metadata {
     /// Transaction receipts indexed by hash.
-    pub receipts: HashMap<B256, OpReceipt>,
+    pub receipts: Option<HashMap<B256, OpReceipt>>,
     /// Updated account balances.
     pub new_account_balances: HashMap<Address, U256>,
     /// Block number this flashblock belongs to.

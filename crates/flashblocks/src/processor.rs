@@ -7,10 +7,11 @@ use std::{
 };
 
 use alloy_consensus::{
-    Header, TxReceipt,
+    Eip658Value, Header, TxReceipt,
     transaction::{Recovered, SignerRecoverable, TransactionMeta},
 };
 use alloy_eips::BlockNumberOrTag;
+use alloy_op_evm::block::receipt_builder::OpReceiptBuilder;
 use alloy_primitives::{B256, BlockNumber, Bytes, Sealable, map::foldhash::HashMap};
 use alloy_rpc_types::{TransactionTrait, Withdrawal};
 use alloy_rpc_types_engine::{ExecutionPayloadV1, ExecutionPayloadV2, ExecutionPayloadV3};
@@ -18,7 +19,7 @@ use alloy_rpc_types_eth::state::StateOverride;
 use arc_swap::ArcSwapOption;
 use base_flashtypes::Flashblock;
 use eyre::eyre;
-use op_alloy_consensus::OpTxEnvelope;
+use op_alloy_consensus::{OpDepositReceipt, OpTxEnvelope};
 use op_alloy_network::TransactionResponse;
 use op_alloy_rpc_types::Transaction;
 use reth::{
@@ -29,11 +30,11 @@ use reth::{
         db::CacheDB,
     },
 };
-use reth_evm::{ConfigureEvm, Evm};
+use reth_evm::{ConfigureEvm, Evm, eth::receipt_builder::ReceiptBuilderCtx};
 use reth_optimism_chainspec::OpHardforks;
 use reth_optimism_evm::{OpEvmConfig, OpNextBlockEnvAttributes};
 use reth_optimism_primitives::{DepositReceipt, OpBlock, OpPrimitives};
-use reth_optimism_rpc::OpReceiptBuilder;
+use reth_optimism_rpc::OpReceiptBuilder as OpRpcReceiptBuilder;
 use reth_primitives::RecoveredBlock;
 use reth_rpc_convert::transaction::ConvertReceiptInput;
 use tokio::sync::{Mutex, broadcast::Sender, mpsc::UnboundedReceiver};
@@ -333,7 +334,9 @@ where
                 .iter()
                 .map(|flashblock| flashblock.metadata.receipts.clone())
                 .fold(HashMap::default(), |mut acc, receipts| {
-                    acc.extend(receipts);
+                    if let Some(receipts) = receipts {
+                        acc.extend(receipts);
+                    }
                     acc
                 });
 
@@ -390,7 +393,7 @@ where
             let evm_env = evm_config.next_evm_env(&last_block_header, &block_env_attributes)?;
             let mut evm = evm_config.evm_with_env(db, evm_env);
 
-            let mut gas_used = 0;
+            let mut cumulative_gas_used: u64 = 0;
             let mut next_log_index = 0;
 
             for (idx, transaction) in block.body.transactions.iter().enumerate() {
@@ -407,16 +410,15 @@ where
                 pending_blocks_builder.with_transaction_sender(tx_hash, sender);
                 pending_blocks_builder.increment_nonce(sender);
 
-                let receipt = receipt_by_hash
-                    .get(&tx_hash)
-                    .cloned()
-                    .ok_or(eyre!("missing receipt for {:?}", tx_hash))?;
+                let receipt = receipt_by_hash.get(&tx_hash).cloned();
 
                 let recovered_transaction = Recovered::new_unchecked(transaction.clone(), sender);
                 let envelope = recovered_transaction.clone().convert::<OpTxEnvelope>();
 
                 // Build Transaction
-                let (deposit_receipt_version, deposit_nonce) = if transaction.is_deposit() {
+                let (deposit_receipt_version, deposit_nonce) = if transaction.is_deposit()
+                    && let Some(receipt) = &receipt
+                {
                     let deposit_receipt = receipt
                         .as_deposit_receipt()
                         .ok_or(eyre!("deposit transaction, non deposit receipt"))?;
@@ -451,54 +453,32 @@ where
                 };
 
                 pending_blocks_builder.with_transaction(rpc_txn);
+                let mut should_execute_transaction = true;
 
                 // Receipt Generation
-                let op_receipt = prev_pending_blocks
-                    .as_ref()
-                    .and_then(|pending_blocks| pending_blocks.get_receipt(tx_hash))
-                    .unwrap_or_else(|| {
-                        let meta = TransactionMeta {
-                            tx_hash,
-                            index: idx as u64,
-                            block_hash: header.hash(),
-                            block_number: block.number,
-                            base_fee: block.base_fee_per_gas,
-                            excess_blob_gas: block.excess_blob_gas,
-                            timestamp: block.timestamp,
-                        };
+                let saved_receipt = {
+                    let receipt = prev_pending_blocks.as_ref().and_then(|p| p.get_receipt(tx_hash));
 
-                        let input: ConvertReceiptInput<'_, OpPrimitives> = ConvertReceiptInput {
-                            receipt: receipt.clone(),
-                            tx: Recovered::new_unchecked(transaction, sender),
-                            gas_used: receipt.cumulative_gas_used() - gas_used,
-                            next_log_index,
-                            meta,
-                        };
+                    if let Some(receipt) = receipt {
+                        pending_blocks_builder.with_receipt(tx_hash, receipt);
+                        true
+                    } else {
+                        false
+                    }
+                };
 
-                        OpReceiptBuilder::new(
-                            self.client.chain_spec().as_ref(),
-                            input,
-                            &mut l1_block_info,
-                        )
-                        .unwrap()
-                        .build()
-                    });
-
-                pending_blocks_builder.with_receipt(tx_hash, op_receipt);
-                gas_used = receipt.cumulative_gas_used();
-                next_log_index += receipt.logs().len();
-
-                let mut should_execute_transaction = true;
-                if let Some(state) =
-                    prev_pending_blocks.as_ref().and_then(|p| p.get_transaction_state(&tx_hash))
+                if saved_receipt
+                    && let Some(state) =
+                        prev_pending_blocks.as_ref().and_then(|p| p.get_transaction_state(&tx_hash))
                 {
                     pending_blocks_builder.with_transaction_state(tx_hash, state);
                     should_execute_transaction = false;
                 }
 
                 if should_execute_transaction {
-                    match evm.transact(recovered_transaction) {
-                        Ok(ResultAndState { state, .. }) => {
+                    match evm.transact(recovered_transaction.clone()) {
+                        Ok(ResultAndState { state, result }) => {
+                            let gas_used = result.gas_used();
                             for (addr, acc) in &state {
                                 let existing_override = state_overrides.entry(*addr).or_default();
                                 existing_override.balance = Some(acc.info.balance);
@@ -514,6 +494,77 @@ where
 
                                 existing.extend(changed_slots);
                             }
+
+                            cumulative_gas_used = cumulative_gas_used
+                                .checked_add(gas_used)
+                                .ok_or(eyre!("cumulative gas used overflow"))?;
+
+                            let receipt_builder =
+                                evm_config.block_executor_factory().receipt_builder();
+
+                            let is_canyon_active = self
+                                .client
+                                .chain_spec()
+                                .is_canyon_active_at_timestamp(block.timestamp);
+                            let receipt = match receipt_builder.build_receipt(ReceiptBuilderCtx {
+                                tx: &recovered_transaction,
+                                evm: &evm,
+                                result,
+                                state: &state,
+                                cumulative_gas_used,
+                            }) {
+                                Ok(receipt) => receipt,
+                                Err(ctx) => {
+                                    let receipt = alloy_consensus::Receipt {
+                                        // Success flag was added in `EIP-658: Embedding transaction status code
+                                        // in receipts`.
+                                        status: Eip658Value::Eip658(ctx.result.is_success()),
+                                        cumulative_gas_used: ctx.cumulative_gas_used,
+                                        logs: ctx.result.into_logs(),
+                                    };
+
+                                    receipt_builder.build_deposit_receipt(OpDepositReceipt {
+                                        inner: receipt,
+                                        deposit_nonce,
+                                        // The deposit receipt version was introduced in Canyon to indicate an
+                                        // update to how receipt hashes should be computed
+                                        // when set. The state transition process ensures
+                                        // this is only set for post-Canyon deposit
+                                        // transactions.
+                                        deposit_receipt_version: is_canyon_active.then_some(1),
+                                    })
+                                }
+                            };
+
+                            let meta = TransactionMeta {
+                                tx_hash,
+                                index: idx as u64,
+                                block_hash: header.hash(),
+                                block_number: block.number,
+                                base_fee: block.base_fee_per_gas,
+                                excess_blob_gas: block.excess_blob_gas,
+                                timestamp: block.timestamp,
+                            };
+
+                            let input: ConvertReceiptInput<'_, OpPrimitives> =
+                                ConvertReceiptInput {
+                                    receipt: receipt.clone(),
+                                    tx: Recovered::new_unchecked(transaction, sender),
+                                    gas_used,
+                                    next_log_index,
+                                    meta,
+                                };
+
+                            let op_receipt = OpRpcReceiptBuilder::new(
+                                self.client.chain_spec().as_ref(),
+                                input,
+                                &mut l1_block_info,
+                            )
+                            .unwrap()
+                            .build();
+                            next_log_index = next_log_index + receipt.logs().len();
+
+                            pending_blocks_builder.with_receipt(tx_hash, op_receipt);
                             pending_blocks_builder.with_transaction_state(tx_hash, state.clone());
                             evm.db_mut().commit(state);
                         }

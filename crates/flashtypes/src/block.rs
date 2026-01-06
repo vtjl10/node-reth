@@ -79,7 +79,6 @@ mod tests {
         #[case] encoder: fn(&FlashblocksPayloadV1) -> Bytes,
     ) {
         let payload = sample_payload(json!({
-            "receipts": {},
             "new_account_balances": {},
             "block_number": 1234u64
         }));
@@ -92,7 +91,7 @@ mod tests {
         assert_eq!(decoded.base, payload.base);
         assert_eq!(decoded.diff, payload.diff);
         assert_eq!(decoded.metadata.block_number, 1234);
-        assert!(decoded.metadata.receipts.is_empty());
+        assert!(decoded.metadata.receipts.is_none());
         assert!(decoded.metadata.new_account_balances.is_empty());
     }
 
